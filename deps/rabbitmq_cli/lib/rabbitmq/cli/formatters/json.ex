@@ -18,7 +18,7 @@ defmodule RabbitMQ.CLI.Formatters.Json do
   end
 
   def format_output(output, _opts) do
-    {:ok, json} = JSON.encode(keys_to_atoms(output))
+    {:ok, json} = JSON.encode(keys_to_atoms(convert_erlang_strings(output)))
     json
   end
 
@@ -72,4 +72,56 @@ defmodule RabbitMQ.CLI.Formatters.Json do
   end
 
   def machine_readable?, do: true
+
+  # Convert Erlang strings (lists of integers) to binaries for proper JSON encoding
+  # Also convert other Erlang-specific terms to readable strings
+  defp convert_erlang_strings(data) when is_function(data) do
+    "Fun()"
+  end
+
+  defp convert_erlang_strings(data) when is_pid(data) do
+    "Pid(#{inspect(data)})"
+  end
+
+  defp convert_erlang_strings(data) when is_port(data) do
+    "Port(#{inspect(data)})"
+  end
+
+  defp convert_erlang_strings(data) when is_reference(data) do
+    "Ref(#{inspect(data)})"
+  end
+
+  defp convert_erlang_strings([]),  do: []
+
+  defp convert_erlang_strings(data) when is_list(data) do
+    try do
+      case :unicode.characters_to_binary(data, :utf8) do
+        binary when is_binary(binary) ->
+          # Successfully converted - it was a valid Unicode string
+          binary
+        _ ->
+          # Conversion failed - not a Unicode string, process as regular list
+          Enum.map(data, &convert_erlang_strings/1)
+      end
+    rescue
+      ArgumentError ->
+        # badarg exception - not valid character data, process as regular list
+        Enum.map(data, &convert_erlang_strings/1)
+    end
+  end
+
+  defp convert_erlang_strings(data) when is_tuple(data) do
+    data
+    |> Tuple.to_list()
+    |> Enum.map(&convert_erlang_strings/1)
+    |> List.to_tuple()
+  end
+
+  defp convert_erlang_strings(data) when is_map(data) do
+    Enum.into(data, %{}, fn {k, v} ->
+      {convert_erlang_strings(k), convert_erlang_strings(v)}
+    end)
+  end
+
+  defp convert_erlang_strings(data), do: data
 end

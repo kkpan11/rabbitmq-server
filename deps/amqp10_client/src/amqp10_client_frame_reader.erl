@@ -8,7 +8,7 @@
 
 -behaviour(gen_statem).
 
--include("amqp10_client.hrl").
+-include("amqp10_client_internal.hrl").
 -include_lib("amqp10_common/include/amqp10_framing.hrl").
 
 -ifdef(TEST).
@@ -253,7 +253,7 @@ handle_input(expecting_frame_body, Data,
             handle_input(expecting_frame_header, Rest, State);
         {<<Body:BodyLength/binary, Rest/binary>>, _} ->
             State1 = State#state{frame_state = undefined},
-            BytesBody = size(Body),
+            BytesBody = byte_size(Body),
             {DescribedPerformative, BytesParsed} = amqp10_binary_parser:parse(Body),
             Performative = amqp10_framing:decode(DescribedPerformative),
             Payload = if BytesParsed < BytesBody ->

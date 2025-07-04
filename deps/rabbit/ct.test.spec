@@ -43,6 +43,7 @@
 ,   disk_monitor_SUITE
 ,   dynamic_qq_SUITE
 ,   exchanges_SUITE
+,   prevent_startup_if_node_was_reset_SUITE
 ,   rabbit_stream_queue_SUITE
 ]}.
 
@@ -117,6 +118,7 @@
 ,   rabbit_local_random_exchange_SUITE
 ,   rabbit_msg_interceptor_SUITE
 ,   rabbit_stream_coordinator_SUITE
+,   rabbit_stream_sac_coordinator_v4_SUITE
 ,   rabbit_stream_sac_coordinator_SUITE
 ,   rabbitmq_4_0_deprecations_SUITE
 ,   rabbitmq_queues_cli_integration_SUITE

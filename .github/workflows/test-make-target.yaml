@@ -15,6 +15,10 @@ on:
         required: false
         default: false
         type: boolean
+      previous_version:
+        required: false
+        default: 'tags/v4.0.9'
+        type: string
       make_target:
         required: true
         type: string
@@ -33,8 +37,13 @@ jobs:
     - name: FETCH TAGS
       run: git fetch --tags
 
+    - name: EXTRACT ACTIVEMQ VERSION
+      if: inputs.plugin == 'amqp10_client'
+      run: |
+        awk '/^ACTIVEMQ_VERSION/ {print $1 "=" $3}' deps/amqp10_client/Makefile >> $GITHUB_ENV
+
     - name: SETUP OTP & ELIXIR
-      uses: erlef/setup-beam@v1.17
+      uses: erlef/setup-beam@v1
       with:
         otp-version: ${{ inputs.erlang_version }}
         elixir-version: ${{ inputs.elixir_version }}
@@ -57,7 +66,7 @@ jobs:
       uses: dsaltares/fetch-gh-release-asset@master
       if: inputs.mixed_clusters
       with:
-        version: 'tags/v4.0.9'
+        version: ${{ inputs.previous_version }}
         regex: true
         file: "rabbitmq-server-generic-unix-\\d.+\\.tar\\.xz"
         target: ./
@@ -87,11 +96,38 @@ jobs:
         sudo systemctl is-active --quiet apparmor.service && sudo systemctl stop apparmor.service
         sudo systemctl disable apparmor.service
 
+    - name: RUN LOW VERSION ERLANG NODE IN DOCKER
+      if: inputs.make_target == 'ct-rabbit_fifo_prop'
+      run: |
+        # This version must be at least 1 major version lower than inputs.erlang_version
+        LOW_ERLANG_VERSION="26.2"
+
+        # Create ~/.erlang.cookie by starting a distributed node
+        erl -sname temp_node -eval 'halt().' -noshell
+
+        docker run -d --network host --name erlang_low_version erlang:${LOW_ERLANG_VERSION} \
+          erl -sname rabbit_fifo_prop@localhost -setcookie $(cat ~/.erlang.cookie) -noinput
+
+    - name: RESTORE ACTIVEMQ FROM CACHE
+      if: inputs.plugin == 'amqp10_client'
+      uses: actions/cache/restore@v4
+      id: cache-activemq-restore
+      with:
+        path: deps/amqp10_client/test/system_SUITE_data/apache-activemq-${{ env.ACTIVEMQ_VERSION }}-bin.tar.gz
+        key: activemq-${{ env.ACTIVEMQ_VERSION }}
+
     - name: RUN TESTS
       if: inputs.plugin != 'rabbitmq_cli'
       run: |
         sudo netstat -ntp
         make -C deps/${{ inputs.plugin }} ${{ inputs.make_target }} RABBITMQ_METADATA_STORE=${{ inputs.metadata_store }}
+
+    - name: CACHE ACTIVEMQ
+      uses: actions/cache/save@v4
+      if: inputs.plugin == 'amqp10_client' && steps.cache-activemq-restore.outputs.cache-hit != 'true'
+      with:
+        path: deps/amqp10_client/test/system_SUITE_data/apache-activemq-${{ env.ACTIVEMQ_VERSION }}-bin.tar.gz
+        key: activemq-${{ env.ACTIVEMQ_VERSION }}
 
     # rabbitmq_cli needs a correct broker version for two of its tests.
     # But setting PROJECT_VERSION makes other plugins fail.

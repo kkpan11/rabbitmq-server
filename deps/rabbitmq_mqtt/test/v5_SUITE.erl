@@ -71,6 +71,7 @@ cluster_size_1_tests() ->
      session_expiry_reconnect_non_zero,
      session_expiry_reconnect_zero,
      session_expiry_reconnect_infinity_to_zero,
+     zero_session_expiry_disconnect_autodeletes_qos0_queue,
      client_publish_qos2,
      client_rejects_publish,
      client_receive_maximum_min,
@@ -141,8 +142,9 @@ suite() ->
 %% Testsuite setup/teardown.
 %% -------------------------------------------------------------------
 
-init_per_suite(Config) ->
+init_per_suite(Config0) ->
     rabbit_ct_helpers:log_environment(),
+    Config = rabbit_ct_helpers:set_config(Config0, {test_plugins, [rabbitmq_mqtt]}),
     rabbit_ct_helpers:run_setup_steps(Config).
 
 end_per_suite(Config) ->
@@ -160,14 +162,18 @@ init_per_group(Group, Config0) ->
                 Config0,
                 [{mqtt_version, v5},
                  {rmq_nodes_count, Nodes},
-                 {rmq_nodename_suffix, Suffix}]),
+                 {rmq_nodename_suffix, Suffix},
+                 {start_rmq_with_plugins_disabled, true}
+                ]),
     Config = rabbit_ct_helpers:merge_app_env(
                Config1,
                {rabbit, [{quorum_tick_interval, 200}]}),
-    rabbit_ct_helpers:run_steps(
-      Config,
-      rabbit_ct_broker_helpers:setup_steps() ++
-      rabbit_ct_client_helpers:setup_steps()).
+    Config2 = rabbit_ct_helpers:run_steps(
+                Config,
+                rabbit_ct_broker_helpers:setup_steps() ++
+                    rabbit_ct_client_helpers:setup_steps()),
+    [util:enable_plugin(Config2, Plugin) || Plugin <- ?config(test_plugins, Config2)],
+    Config2.
 
 end_per_group(G, Config)
   when G =:= cluster_size_1;
@@ -188,6 +194,12 @@ init_per_testcase(T, Config)
     ok = rpc(Config, application, set_env, [?APP, Par, infinity]),
     Config1 = rabbit_ct_helpers:set_config(Config, {Par, Default}),
     init_per_testcase0(T, Config1);
+
+init_per_testcase(T, Config)
+    when T =:= zero_session_expiry_disconnect_autodeletes_qos0_queue ->
+  rpc(Config, rabbit_registry, register, [queue, <<"qos0">>, rabbit_mqtt_qos0_queue]),
+  init_per_testcase0(T, Config);
+
 init_per_testcase(T, Config) ->
     init_per_testcase0(T, Config).
 
@@ -202,6 +214,11 @@ end_per_testcase(T, Config)
     Default = ?config(Par, Config),
     ok = rpc(Config, application, set_env, [?APP, Par, Default]),
     end_per_testcase0(T, Config);
+end_per_testcase(T, Config)
+    when T =:= zero_session_expiry_disconnect_autodeletes_qos0_queue ->
+  ok = rpc(Config, rabbit_registry, unregister, [queue, <<"qos0">>]),
+  init_per_testcase0(T, Config);
+
 end_per_testcase(T, Config) ->
     end_per_testcase0(T, Config).
 
@@ -388,6 +405,22 @@ session_expiry_quorum_queue_disconnect_decrease(Config) ->
     ok = rpc(Config, application, set_env, [?APP, durable_queue_type, quorum]),
     ok = session_expiry_disconnect_decrease(rabbit_quorum_queue, Config),
     ok = rpc(Config, application, unset_env, [?APP, durable_queue_type]).
+
+zero_session_expiry_disconnect_autodeletes_qos0_queue(Config) ->
+    ClientId = ?FUNCTION_NAME,
+    C = connect(ClientId, Config, [
+        {clean_start, false},
+        {properties, #{'Session-Expiry-Interval' => 0}}]),
+    {ok, _, _} = emqtt:subscribe(C, <<"topic0">>, qos0),
+    QsQos0 = rpc(Config, rabbit_amqqueue, list_by_type, [rabbit_mqtt_qos0_queue]),
+    ?assertEqual(1, length(QsQos0)),
+
+    ok = emqtt:disconnect(C),
+    %% After terminating a clean session, we expect any session state to be cleaned up on the server.
+    %% Give the node some time to clean up the MQTT QoS 0 queue.
+    timer:sleep(200),
+    L = rpc(Config, rabbit_amqqueue, list, []),
+    ?assertEqual(0, length(L)).
 
 session_expiry_disconnect_decrease(QueueType, Config) ->
     ClientId = ?FUNCTION_NAME,
@@ -890,6 +923,7 @@ subscription_options_persisted(Config) ->
                                        {<<"t2">>, [{nl, false}, {rap, true}, {qos, 1}]}]),
     unlink(C1),
     ok = rabbit_ct_broker_helpers:restart_node(Config, 0),
+    [util:enable_plugin(Config, Plugin) || Plugin <- ?config(test_plugins, Config)],
     C2 = connect(ClientId, Config, [{clean_start, false}]),
     ok = emqtt:publish(C2, <<"t1">>, <<"m1">>),
     ok = emqtt:publish(C2, <<"t2">>, <<"m2">>, [{retain, true}]),
@@ -1714,6 +1748,7 @@ will_delay_node_restart(Config) ->
     timer:sleep(SleepMs),
     assert_nothing_received(),
     ok = rabbit_ct_broker_helpers:start_node(Config, 0),
+    [util:enable_plugin(Config, Plugin) || Plugin <- ?config(test_plugins, Config)],
     %% After node 0 restarts, we should receive the Will Message promptly on both nodes 0 and 1.
     receive {publish, #{client_pid := Sub1,
                         payload := Payload}} -> ok

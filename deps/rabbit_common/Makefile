@@ -43,12 +43,12 @@ DEP_EARLY_PLUGINS = $(PROJECT)/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = $(PROJECT)/mk/rabbitmq-build.mk \
 	      $(PROJECT)/mk/rabbitmq-hexpm.mk
 
-PLT_APPS += mnesia crypto ssl
+PLT_APPS += mnesia crypto ssl xmerl
 
-include rabbitmq-components.mk
-include erlang.mk
+include ../../rabbitmq-components.mk
+include ../../erlang.mk
 
-HEX_TARBALL_FILES += rabbitmq-components.mk \
+HEX_TARBALL_FILES += ../../rabbitmq-components.mk \
 		     git-revisions.txt \
 		     mk/rabbitmq-build.mk \
 		     mk/rabbitmq-dist.mk \

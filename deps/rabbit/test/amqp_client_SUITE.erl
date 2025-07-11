@@ -175,7 +175,8 @@ groups() ->
        x_cc_annotation_exchange_routing_key_empty,
        x_cc_annotation_queue,
        x_cc_annotation_null,
-       bad_x_cc_annotation_exchange
+       bad_x_cc_annotation_exchange,
+       decimal_types
       ]},
 
      {cluster_size_3, [shuffle],
@@ -326,7 +327,15 @@ init_per_testcase(T, Config)
     end;
 init_per_testcase(T, Config)
   when T =:= leader_transfer_quorum_queue_credit_single orelse
-       T =:= leader_transfer_quorum_queue_credit_batches ->
+       T =:= leader_transfer_quorum_queue_credit_batches orelse
+       T =:= async_notify_unsettled_classic_queue orelse
+       T =:= leader_transfer_stream_credit_single orelse
+       T =:= dead_letter_into_stream orelse
+       T =:= classic_queue_on_new_node orelse
+       T =:= leader_transfer_quorum_queue_send orelse
+       T =:= last_queue_confirms orelse
+       T =:= leader_transfer_stream_credit_batches orelse
+       T =:= leader_transfer_stream_send ->
     %% These test cases flake with feature flag 'rabbitmq_4.0.0' disabled.
     case rabbit_ct_broker_helpers:enable_feature_flag(Config, 'rabbitmq_4.0.0') of
         ok ->
@@ -341,14 +350,6 @@ init_per_testcase(T = immutable_bare_message, Config) ->
         _ ->
             {skip, "RabbitMQ is known to wrongfully modify the bare message with feature "
              "flag rabbitmq_4.0.0 disabled"}
-    end;
-init_per_testcase(T = dead_letter_into_stream, Config) ->
-    case rabbit_ct_broker_helpers:enable_feature_flag(Config, message_containers_deaths_v2) of
-        ok ->
-            rabbit_ct_helpers:testcase_started(Config, T);
-        _ ->
-            {skip, "This test is known to fail with feature flag message_containers_deaths_v2 disabled "
-             "due to missing feature https://github.com/rabbitmq/rabbitmq-server/issues/11173"}
     end;
 init_per_testcase(T = dead_letter_reject, Config) ->
     case rabbit_ct_broker_helpers:enable_feature_flag(Config, message_containers_deaths_v2) of
@@ -6684,6 +6685,69 @@ bad_x_cc_annotation_exchange(Config) ->
 
     ok = end_session_sync(Session),
     ok = close_connection_sync(Connection).
+
+%% Test that RabbitMQ can store and forward AMQP decimal types.
+decimal_types(Config) ->
+    QName = atom_to_binary(?FUNCTION_NAME),
+    Address = rabbitmq_amqp_address:queue(QName),
+    {_, Session, LinkPair} = Init = init(Config),
+    {ok, _} = rabbitmq_amqp_client:declare_queue(
+                LinkPair, QName,
+                #{arguments => #{<<"x-queue-type">> => {utf8, <<"quorum">>}}}),
+    {ok, Sender} = amqp10_client:attach_sender_link(Session, <<"sender">>, Address),
+    ok = wait_for_credit(Sender),
+
+    Decimal32Zero = <<16#22, 16#50, 0, 0>>,
+    Decimal64Zero = <<16#22, 16#34, 0, 0, 0, 0, 0, 0>>,
+    Decimal128Zero = <<16#22, 16#08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>,
+    Decimal3242 = <<16#22, 16#50, 16#00, 16#2A>>, % 42
+    Decimal32NaN = <<16#7C, 0, 0, 0>>,
+    Body = #'v1_0.amqp_value'{content = {list, [{as_is, 16#74, Decimal32Zero},
+                                                {as_is, 16#84, Decimal64Zero},
+                                                {as_is, 16#94, Decimal128Zero}]}},
+    MsgAnns = #{<<"x-decimal-32">> => {as_is, 16#74, Decimal3242},
+                <<"x-decimal-64">> => {as_is, 16#84, Decimal64Zero},
+                <<"x-decimal-128">> => {as_is, 16#94, Decimal128Zero},
+                <<"x-list">> => {list, [{as_is, 16#94, Decimal128Zero}]},
+                <<"x-map">> => {map, [{{utf8, <<"key-1">>},
+                                       {as_is, 16#94, Decimal128Zero}}]}},
+    AppProps = #{<<"decimal-32">> => {as_is, 16#74, Decimal32NaN}},
+    Msg0 = amqp10_msg:set_message_annotations(
+             MsgAnns,
+             amqp10_msg:set_application_properties(
+               AppProps,
+               amqp10_msg:new(<<"tag">>, Body))),
+    ok = amqp10_client:send_msg(Sender, Msg0),
+    ok = wait_for_accepted(<<"tag">>),
+    ok = amqp10_client:send_msg(Sender, Msg0),
+    ok = wait_for_accepted(<<"tag">>),
+    ok = detach_link_sync(Sender),
+
+    %% Consume the first message via AMQP 1.0
+    {ok, Receiver} = amqp10_client:attach_receiver_link(
+                       Session, <<"receiver">>, Address, unsettled),
+    {ok, Msg} = amqp10_client:get_msg(Receiver),
+    ?assertEqual(Body, amqp10_msg:body(Msg)),
+    ?assertMatch(#{<<"x-decimal-32">> := {as_is, 16#74, Decimal3242},
+                   <<"x-decimal-64">> := {as_is, 16#84, Decimal64Zero},
+                   <<"x-decimal-128">> := {as_is, 16#94, Decimal128Zero},
+                   <<"x-list">> := [{as_is, 16#94, Decimal128Zero}],
+                   <<"x-map">> := [{{utf8, <<"key-1">>},
+                                    {as_is, 16#94, Decimal128Zero}}]},
+                 amqp10_msg:message_annotations(Msg)),
+    ?assertEqual(AppProps, amqp10_msg:application_properties(Msg)),
+    ok = amqp10_client:accept_msg(Receiver, Msg),
+    ok = detach_link_sync(Receiver),
+
+    %% Consume the second message via AMQP 0.9.1
+    %% We expect to receive the message without any crashes.
+    {Conn, Ch} = rabbit_ct_client_helpers:open_connection_and_channel(Config),
+    ?assertMatch({#'basic.get_ok'{}, #amqp_msg{}},
+                 amqp_channel:call(Ch, #'basic.get'{queue = QName, no_ack = true})),
+    ok = rabbit_ct_client_helpers:close_connection_and_channel(Conn, Ch),
+
+    {ok, _} = rabbitmq_amqp_client:delete_queue(LinkPair, QName),
+    ok = close(Init).
 
 %% Attach a receiver to an unavailable quorum queue.
 attach_to_down_quorum_queue(Config) ->

@@ -3,9 +3,6 @@
 -compile(nowarn_export_all).
 -compile(export_all).
 
--export([
-         ]).
-
 -include_lib("proper/include/proper.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -87,7 +84,9 @@ all_tests() ->
      dlx_07,
      dlx_08,
      dlx_09,
-     single_active_ordering_02
+     single_active_ordering_02,
+     two_nodes_same_otp_version,
+     two_nodes_different_otp_version
     ].
 
 groups() ->
@@ -1095,6 +1094,97 @@ single_active_ordering_03(_Config) ->
             false
     end.
 
+%% Run the log on two Erlang nodes with the same OTP version.
+two_nodes_same_otp_version(Config0) ->
+    Config = rabbit_ct_helpers:run_setup_steps(Config0,
+                                               rabbit_ct_broker_helpers:setup_steps()),
+    Node = rabbit_ct_broker_helpers:get_node_config(Config, 0, nodename),
+    case is_same_otp_version(Config) of
+        true ->
+            ok = rabbit_ct_broker_helpers:add_code_path_to_node(Node, ?MODULE),
+            two_nodes(Node);
+        false ->
+            ct:fail("expected CT node and RabbitMQ node to have the same OTP version")
+    end,
+    rabbit_ct_helpers:run_teardown_steps(Config,
+                                         rabbit_ct_broker_helpers:teardown_steps()).
+
+%% Run the log on two Erlang nodes with different OTP versions.
+two_nodes_different_otp_version(_Config) ->
+    case erlang:system_info(otp_release) of
+        "28" ->
+            %% Compiling a BEAM file on OTP 28 and loading it on OTP 26 or 27
+            %% causes a "corrupt atom table" error.
+            %% https://github.com/erlang/otp/pull/8913#issue-2572291638
+            {skip, "loading BEAM file compiled on OTP 28 on a lower OTP version is unsupported"};
+        _ ->
+            Node = 'rabbit_fifo_prop@localhost',
+            case net_adm:ping(Node) of
+                pong ->
+                    case is_same_otp_version(Node) of
+                        true ->
+                            {skip, "expected CT node and 'rabbit_fifo_prop@localhost' "
+                                    "to have different OTP versions"};
+                        false ->
+                            Prefixes = ["rabbit_fifo", "rabbit_misc", "mc",
+                                        "lqueue", "priority_queue", "ra_"],
+                            [begin
+                                 Mod = list_to_atom(ModStr),
+                                 {Mod, Bin, _File} = code:get_object_code(Mod),
+                                 {module, Mod} = erpc:call(Node, code, load_binary,
+                                                           [Mod, ModStr, Bin])
+                             end
+                             || {ModStr, _FileName, _Loaded} <- code:all_available(),
+                                lists:any(fun(Prefix) ->
+                                                  lists:prefix(Prefix, ModStr)
+                                          end, Prefixes)],
+                            two_nodes(Node)
+                    end;
+                pang ->
+                    Reason = {node_down, Node},
+                    case rabbit_ct_helpers:is_ci() of
+                        true ->
+                            ct:fail(Reason);
+                        false ->
+                            {skip, Reason}
+                    end
+            end
+    end.
+
+is_same_otp_version(ConfigOrNode) ->
+    OurOTP = erlang:system_info(otp_release),
+    OtherOTP = case ConfigOrNode of
+                   Cfg when is_list(Cfg) ->
+                       rabbit_ct_broker_helpers:rpc(Cfg, erlang, system_info, [otp_release]);
+                   Node when is_atom(Node) ->
+                       erpc:call(Node, erlang, system_info, [otp_release])
+               end,
+    ct:pal("Our CT node runs OTP ~s, other node runs OTP ~s", [OurOTP, OtherOTP]),
+    OurOTP =:= OtherOTP.
+
+two_nodes(Node) ->
+    Size = 500,
+    run_proper(
+      fun () ->
+              ?FORALL({Length, Bytes, DeliveryLimit, SingleActive},
+                      frequency([{5, {undefined, undefined, undefined, false}},
+                                 {5, {oneof([range(1, 10), undefined]),
+                                      oneof([range(1, 1000), undefined]),
+                                      oneof([range(1, 3), undefined]),
+                                      oneof([true, false])
+                                     }}]),
+                      begin
+                          Conf = config(?FUNCTION_NAME,
+                                        Length,
+                                        Bytes,
+                                        SingleActive,
+                                        DeliveryLimit),
+                          ?FORALL(O, ?LET(Ops, log_gen_different_nodes(Size), expand(Ops, Conf)),
+                                  collect({log_size, length(O)},
+                                          different_nodes_prop(Node, Conf, O)))
+                      end)
+      end, [], Size).
+
 max_length(_Config) ->
     %% tests that max length is never transgressed
     Size = 1000,
@@ -1454,6 +1544,19 @@ single_active_prop(Conf0, Commands, ValidateOrder) ->
             false
     end.
 
+different_nodes_prop(Node, Conf0, Commands) ->
+    Conf = Conf0#{release_cursor_interval => 100},
+    Indexes = lists:seq(1, length(Commands)),
+    Entries = lists:zip(Indexes, Commands),
+    InitState = test_init(Conf),
+    Fun = fun(_) -> true end,
+    MachineVersion = 6,
+
+    {State1, _Effs1} = run_log(InitState, Entries, Fun, MachineVersion),
+    {State2, _Effs2} = erpc:call(Node, ?MODULE, run_log,
+                                 [InitState, Entries, Fun, MachineVersion]),
+    State1 =:= State2.
+
 messages_total_prop(Conf0, Commands) ->
     Conf = Conf0#{release_cursor_interval => 100},
     Indexes = lists:seq(1, length(Commands)),
@@ -1794,6 +1897,29 @@ log_gen_without_checkout_cancel(Size) ->
                           {2, checkout_gen(oneof(CPids))},
                           {1, down_gen(oneof(EPids ++ CPids))},
                           {1, nodeup_gen(Nodes)},
+                          {1, purge}
+                         ]))))).
+
+log_gen_different_nodes(Size) ->
+    Nodes = [node(),
+             fakenode@fake,
+             fakenode@fake2
+            ],
+    ?LET(EPids, vector(4, pid_gen(Nodes)),
+         ?LET(CPids, vector(4, pid_gen(Nodes)),
+              resize(Size,
+                     list(
+                       frequency(
+                         [{10, enqueue_gen(oneof(EPids))},
+                          {20, {input_event,
+                                frequency([{10, settle},
+                                           {2, return},
+                                           {2, discard},
+                                           {2, requeue}])}},
+                          {8, checkout_gen(oneof(CPids))},
+                          {2, checkout_cancel_gen(oneof(CPids))},
+                          {6, down_gen(oneof(EPids ++ CPids))},
+                          {6, nodeup_gen(Nodes)},
                           {1, purge}
                          ]))))).
 

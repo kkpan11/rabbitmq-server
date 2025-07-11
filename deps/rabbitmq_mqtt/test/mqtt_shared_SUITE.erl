@@ -164,7 +164,18 @@ init_per_suite(Config) ->
                 Config, {rabbit, [
                                   {quorum_tick_interval, 1000},
                                   {stream_tick_interval, 1000},
-                                  {forced_feature_flags_on_init, []}
+                                  {forced_feature_flags_on_init, [
+                                                                  delete_ra_cluster_mqtt_node,
+                                                                  mqtt_v5,
+                                                                  rabbit_mqtt_qos0_queue,
+                                                                  restart_streams,
+                                                                  stream_sac_coordinator_unblock_group,
+                                                                  stream_update_config_command,
+                                                                  stream_filtering,
+                                                                  message_containers,
+                                                                  quorum_queue_non_voters
+                                                                 ]},
+                                  {start_rmq_with_plugins_disabled, true}
                                  ]}),
     rabbit_ct_helpers:run_setup_steps(Config1).
 
@@ -189,10 +200,12 @@ init_per_group(Group, Config0) ->
                Config0,
                [{rmq_nodes_count, Nodes},
                 {rmq_nodename_suffix, Suffix}]),
-    rabbit_ct_helpers:run_steps(
-      Config,
-      rabbit_ct_broker_helpers:setup_steps() ++
-      rabbit_ct_client_helpers:setup_steps()).
+    Config1 = rabbit_ct_helpers:run_steps(
+                Config,
+                rabbit_ct_broker_helpers:setup_steps() ++
+                    rabbit_ct_client_helpers:setup_steps()),
+    util:enable_plugin(Config1, rabbitmq_mqtt),
+    Config1.
 
 end_per_group(G, Config)
   when G =:= cluster_size_1;
@@ -211,6 +224,7 @@ init_per_testcase(T, Config)
     init_per_testcase0(T, Config);
 init_per_testcase(T, Config)
   when T =:= clean_session_disconnect_client;
+       T =:= zero_session_expiry_interval_disconnect_client;
        T =:= clean_session_node_restart;
        T =:= clean_session_node_kill;
        T =:= notify_consumer_qos0_queue_deleted ->
@@ -229,6 +243,7 @@ end_per_testcase(T, Config)
     end_per_testcase0(T, Config);
 end_per_testcase(T, Config)
   when T =:= clean_session_disconnect_client;
+       T =:= zero_session_expiry_interval_disconnect_client;
        T =:= clean_session_node_restart;
        T =:= clean_session_node_kill;
        T =:= notify_consumer_qos0_queue_deleted ->

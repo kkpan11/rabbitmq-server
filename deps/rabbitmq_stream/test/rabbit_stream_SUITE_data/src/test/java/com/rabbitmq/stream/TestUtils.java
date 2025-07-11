@@ -11,7 +11,8 @@
 // The Original Code is RabbitMQ.
 //
 // The Initial Developer of the Original Code is Pivotal Software, Inc.
-// Copyright (c) 2007-2025 Broadcom. All Rights Reserved. The term “Broadcom” refers to Broadcom Inc. and/or its subsidiaries. All rights reserved.
+// Copyright (c) 2007-2025 Broadcom. All Rights Reserved. The term “Broadcom” refers to Broadcom
+// Inc. and/or its subsidiaries. All rights reserved.
 //
 
 package com.rabbitmq.stream;
@@ -24,7 +25,8 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.rabbitmq.stream.impl.Client;
 import com.rabbitmq.stream.impl.Client.Response;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -52,7 +54,7 @@ public class TestUtils {
     waitAtMost(Duration.ofSeconds(10), condition);
   }
 
-  static void waitAtMost(Duration duration, BooleanSupplier condition) throws InterruptedException {
+  static void waitAtMost(Duration duration, BooleanSupplier condition) {
     if (condition.getAsBoolean()) {
       return;
     }
@@ -60,7 +62,12 @@ public class TestUtils {
     int waitedTime = 0;
     long timeoutInMs = duration.toMillis();
     while (waitedTime <= timeoutInMs) {
-      Thread.sleep(waitTime);
+      try {
+        Thread.sleep(waitTime);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new RuntimeException(e);
+      }
       if (condition.getAsBoolean()) {
         return;
       }
@@ -85,7 +92,8 @@ public class TestUtils {
 
     @Override
     public void beforeAll(ExtensionContext context) {
-      store(context).put("nettyEventLoopGroup", new NioEventLoopGroup());
+      store(context)
+          .put("nettyEventLoopGroup", new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory()));
     }
 
     @Override

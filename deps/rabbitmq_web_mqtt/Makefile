@@ -21,7 +21,7 @@ LOCAL_DEPS = ssl
 DEPS = rabbit cowboy rabbitmq_mqtt
 TEST_DEPS = emqtt rabbitmq_ct_helpers rabbitmq_ct_client_helpers rabbitmq_management rabbitmq_stomp rabbitmq_consistent_hash_exchange
 
-PLT_APPS += rabbitmq_cli elixir cowlib
+PLT_APPS += rabbitmq_cli elixir cowlib ssl
 
 # FIXME: Add Ranch as a BUILD_DEPS to be sure the correct version is picked.
 # See rabbitmq-components.mk.
@@ -34,6 +34,8 @@ DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
 include ../../rabbitmq-components.mk
 include ../../erlang.mk
+
+CT_HOOKS = rabbit_ct_hook
 
 # We are using mqtt_shared_SUITE from rabbitmq_mqtt.
 CT_OPTS += -pa ../rabbitmq_mqtt/test/

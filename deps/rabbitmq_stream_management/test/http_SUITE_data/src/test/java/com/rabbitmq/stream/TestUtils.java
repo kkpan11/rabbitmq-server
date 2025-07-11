@@ -11,7 +11,8 @@
 // The Original Code is RabbitMQ.
 //
 // The Initial Developer of the Original Code is Pivotal Software, Inc.
-// Copyright (c) 2007-2025 Broadcom. All Rights Reserved. The term “Broadcom” refers to Broadcom Inc. and/or its subsidiaries. All rights reserved.
+// Copyright (c) 2007-2025 Broadcom. All Rights Reserved. The term “Broadcom” refers to Broadcom
+// Inc. and/or its subsidiaries. All rights reserved.
 //
 
 package com.rabbitmq.stream;
@@ -22,7 +23,8 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import com.rabbitmq.stream.impl.Client;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.security.cert.X509Certificate;
@@ -114,7 +116,8 @@ public class TestUtils {
 
     @Override
     public void beforeAll(ExtensionContext context) {
-      store(context).put("nettyEventLoopGroup", new NioEventLoopGroup());
+      store(context)
+          .put("nettyEventLoopGroup", new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory()));
     }
 
     @Override

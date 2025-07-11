@@ -146,7 +146,8 @@ dirty_query(Servers, QName, Fun) ->
               case rpc:call(N, ra, local_query, [{QName, N}, Fun]) of
                   {ok, {_, Msgs}, _} ->
                       Msgs;
-                  _E ->
+                  E ->
+                      ct:log(error, "~s:~s rpc:call ra:local_query failed with ~p", [?MODULE, ?FUNCTION_NAME, E]),
                       undefined
               end
       end, Servers).
@@ -159,10 +160,6 @@ filter_queues(Expected, Got) ->
     lists:filter(fun(G) ->
                          lists:member(hd(G), Keys)
                  end, Got).
-
-ra_machines_use_same_version(Config) ->
-    Nodenames = rabbit_ct_broker_helpers:get_node_configs(Config, nodename),
-    ra_machines_use_same_version(rabbit_fifo, Config, Nodenames).
 
 ra_machines_use_same_version(MachineModule, Config, Nodenames)
   when length(Nodenames) >= 1 ->

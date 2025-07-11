@@ -41,17 +41,17 @@ DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk \
 DEP_PLUGINS += elvis_mk
 dep_elvis_mk = git https://github.com/inaka/elvis.mk.git master
 
-include rabbitmq-components.mk
-include erlang.mk
+include ../../rabbitmq-components.mk
+include ../../erlang.mk
 
-HEX_TARBALL_FILES += rabbitmq-components.mk \
+HEX_TARBALL_FILES += ../../rabbitmq-components.mk \
 		     git-revisions.txt
 
 # --------------------------------------------------------------------
 # ActiveMQ for the testsuite.
 # --------------------------------------------------------------------
 
-ACTIVEMQ_VERSION := 5.18.3
+ACTIVEMQ_VERSION := 6.1.7
 ACTIVEMQ_URL := 'https://archive.apache.org/dist/activemq/$(ACTIVEMQ_VERSION)/apache-activemq-$(ACTIVEMQ_VERSION)-bin.tar.gz'
 
 ACTIVEMQ := $(abspath test/system_SUITE_data/apache-activemq-$(ACTIVEMQ_VERSION)/bin/activemq)
